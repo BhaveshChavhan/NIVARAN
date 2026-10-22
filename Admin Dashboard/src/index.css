@@ -1,0 +1,183 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Leaflet container sizing & dark theme */
+.leaflet-container {
+  width: 100% !important;
+  height: 100% !important;
+  min-height: 100% !important;
+  background: #0f0f0f !important;
+  z-index: 1;
+}
+
+/* SOS Pulsing Marker */
+.sos-marker-wrapper {
+  position: relative;
+  width: 20px;
+  height: 20px;
+}
+
+/* Resolved SOS Marker */
+.sos-resolved-wrapper {
+  position: relative;
+  width: 20px;
+  height: 20px;
+}
+
+.sos-resolved-dot {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 14px;
+  height: 14px;
+  background: #10b981;
+  border: 2px solid #ffffff;
+  border-radius: 50%;
+  z-index: 2;
+  box-shadow: 0 0 8px rgba(16, 185, 129, 0.7);
+}
+
+
+.sos-dot {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 12px;
+  height: 12px;
+  background: #ef4444;
+  border-radius: 50%;
+  z-index: 2;
+  animation: pulse-dot 1.5s ease-in-out infinite;
+  box-shadow: 0 0 8px #ef4444;
+}
+
+.sos-ring {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 12px;
+  height: 12px;
+  border: 2px solid #ef4444;
+  border-radius: 50%;
+  animation: pulse-ring 1.5s ease-out infinite;
+}
+
+.sos-ring-2 {
+  animation-delay: 0.5s;
+}
+
+@keyframes pulse-ring {
+  0% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+  100% { transform: translate(-50%, -50%) scale(3.5); opacity: 0; }
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+/* Leaflet dark popup */
+.leaflet-popup-content-wrapper {
+  background: #1a1a1a !important;
+  color: #e5e7eb !important;
+  border: 1px solid #2a2a2a !important;
+  border-radius: 8px !important;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.6) !important;
+}
+
+.leaflet-popup-tip {
+  background: #1a1a1a !important;
+}
+
+.leaflet-popup-close-button {
+  color: #6b7280 !important;
+}
+
+/* Mesh relay animation */
+@keyframes packet-flow {
+  0% { stroke-dashoffset: 100; opacity: 0.3; }
+  50% { opacity: 1; }
+  100% { stroke-dashoffset: 0; opacity: 0.3; }
+}
+
+.mesh-path-line {
+  stroke-dasharray: 8 4;
+  animation: packet-flow 1.5s linear infinite;
+}
+
+/* Status badge pulse */
+@keyframes status-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4); }
+  50% { box-shadow: 0 0 0 6px rgba(239, 68, 68, 0); }
+}
+
+.status-active {
+  animation: status-pulse 1.5s ease-in-out infinite;
+}
+
+/* Table row hover */
+.data-row {
+  transition: background 0.15s ease;
+}
+.data-row:hover {
+  background: rgba(255,255,255,0.03);
+}
+
+/* Sidebar nav active */
+.nav-active {
+  background: rgba(239, 68, 68, 0.12);
+  border-left: 2px solid #ef4444;
+  color: #ef4444;
+}
+
+.nav-item {
+  border-left: 2px solid transparent;
+  transition: all 0.15s ease;
+}
+
+.nav-item:hover {
+  background: rgba(255,255,255,0.05);
+  color: #e5e7eb;
+}
+
+/* Card glow on hover */
+.stat-card {
+  transition: box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.stat-card:hover {
+  box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.3), 0 8px 32px rgba(0,0,0,0.4);
+}
+
+/* Recharts dark theme overrides */
+.recharts-cartesian-grid-horizontal line,
+.recharts-cartesian-grid-vertical line {
+  stroke: #2a2a2a;
+}
+
+.recharts-text {
+  fill: #6b7280;
+  font-size: 11px;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+/* Heatmap grid cells */
+.heatmap-cell {
+  transition: opacity 0.2s ease;
+}
+
+.heatmap-cell:hover {
+  opacity: 0.85;
+  cursor: pointer;
+}
+
+/* Toast override */
+.toast-sos {
+  background: #7f1d1d !important;
+  border: 1px solid #ef4444 !important;
+  color: white !important;
+}

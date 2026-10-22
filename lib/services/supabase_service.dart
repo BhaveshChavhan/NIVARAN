@@ -1,0 +1,400 @@
+import 'dart:io';
+import 'dart:convert';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:flutter/foundation.dart';
+
+class SupabaseService {
+  static final SupabaseClient _supabase = Supabase.instance.client;
+
+  // 1. Full User Profile Sync (including password)
+  // Returns null on success, or an error string on failure.
+  static Future<String?> syncUserProfile({
+    required String name,
+    required String email,
+    required String phone,
+    required String idNumber,
+    required String gender,
+    bool isVerified = false,
+    String? kycHash,
+    String? kycTxHash,
+    String? password,
+  }) async {
+    try {
+      final Map<String, dynamic> data = {
+        'email': email,
+        'name': name,
+        'phone': phone,
+        'id_number': idNumber,
+        'gender': gender,
+        'is_verified': isVerified,
+        'kyc_hash': kycHash,
+        'kyc_tx_hash': kycTxHash,
+        'updated_at': DateTime.now().toIso8601String(),
+      };
+      
+      if (password != null) {
+        data['password'] = password;
+      }
+
+      // Check if phone number is already registered under a different email
+      final existingPhone = await _supabase
+          .from('users')
+          .select('email')
+          .eq('phone', phone)
+          .maybeSingle();
+
+      if (existingPhone != null && existingPhone['email'] != email) {
+        return 'This phone number is already registered with another account.';
+      }
+
+      await _supabase.from('users').upsert(data, onConflict: 'email');
+      debugPrint('Supabase: Profile synced for $email');
+      return null; // success
+    } catch (e) {
+      final errMsg = 'Supabase Error (syncUserProfile): $e';
+      debugPrint(errMsg);
+      return errMsg;
+    }
+  }
+
+  // 1a. Update only Verification Data (prevents clearing password)
+  static Future<void> updateVerificationDetails({
+    required String email,
+    required bool isVerified,
+    required String kycHash,
+    required String kycTxHash,
+  }) async {
+    try {
+      await _supabase.from('users').update({
+        'is_verified': isVerified,
+        'kyc_hash': kycHash,
+        'kyc_tx_hash': kycTxHash,
+        'updated_at': DateTime.now().toIso8601String(),
+      }).eq('email', email);
+      debugPrint('Supabase: Verification details updated for $email');
+    } catch (e) {
+      debugPrint('Supabase Error (updateVerificationDetails): $e');
+    }
+  }
+
+  // 1b. Log a Scanned Verification (When user scans someone else)
+  static Future<void> logIdentityVerification({
+    required String verifierEmail,
+    required String scannedHash,
+  }) async {
+    try {
+      await _supabase.from('verified_identities').insert({
+        'verifier_email': verifierEmail,
+        'scanned_hash': scannedHash,
+        'verified_at': DateTime.now().toIso8601String(),
+      });
+      debugPrint('Supabase: Verification logged for $verifierEmail -> $scannedHash');
+    } catch (e) {
+      debugPrint('Supabase Error (logIdentityVerification): $e');
+    }
+  }
+
+  // 2. Log SOS Event
+  static Future<Map<String, dynamic>> logSOSEvent({
+    required String userEmail,
+    required String type,
+    required double latitude,
+    required double longitude,
+    String? id,
+    String? userName,
+    String? userPhone,
+    List<String>? meshPath,
+    String? notes,
+    String? blockchainHash,
+    DateTime? createdAt,
+  }) async {
+    try {
+      final lowerType = type.toLowerCase();
+      String mappedEmergency = 'crime';
+      if (lowerType.contains('medical')) {
+        mappedEmergency = 'medical';
+      } else if (lowerType.contains('fire')) {
+        mappedEmergency = 'fire';
+      } else if (lowerType.contains('accident')) {
+        mappedEmergency = 'accident';
+      } else if (lowerType.contains('crime') || lowerType.contains('sos')) {
+        mappedEmergency = 'crime';
+      } else {
+        mappedEmergency = 'other';
+      }
+
+      final data = {
+        if (id != null) 'id': id,
+        'user_email': userEmail,
+        'user_name': userName ?? userEmail.split('@').first,
+        if (userPhone != null && userPhone.isNotEmpty) 'user_phone': userPhone,
+        'type': lowerType,
+        'emergency_type': mappedEmergency,
+        'status': 'active',
+        'latitude': latitude,
+        'longitude': longitude,
+        'lat': latitude,
+        'lng': longitude,
+        'mesh_path': meshPath ?? ['Mobile Node (Direct)'],
+        'notes': notes ?? 'Emergency SOS Alert',
+        'blockchain_hash': blockchainHash,
+        'created_at': (createdAt ?? DateTime.now()).toUtc().toIso8601String(),
+      };
+      
+      final response = await _supabase.from('sos_logs').insert(data).select();
+      
+      if (response.isNotEmpty) {
+        final id = response.first['id']?.toString();
+        debugPrint('Supabase: SOS Alert logged (ID: $id)');
+        return {'success': true, 'id': id};
+      }
+      return {'success': false, 'error': 'No response from database'};
+    } catch (e) {
+      debugPrint('Supabase Critical Error (logSOSEvent): $e');
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+
+  static Future<void> resolveSOSEvent(String id) async {
+    try {
+      await _supabase.from('sos_logs').update({
+        'status': 'resolved',
+        'resolved_at': DateTime.now().toUtc().toIso8601String(),
+      }).eq('id', id);
+    } catch (e) {
+      debugPrint('Supabase resolveSOSEvent error: $e');
+    }
+  }
+
+  // 2c. Upload SOS Audio to Supabase Storage and update the log
+  static Future<String?> uploadSOSAudio({
+    required String logId,
+    required String filePath,
+  }) async {
+    try {
+      final file = await _readFileBytes(filePath);
+      if (file == null) {
+        debugPrint('Supabase: Audio file not found at $filePath');
+        return null;
+      }
+      
+      // 1. Encode as data URI for instant, reliable delivery without storage bucket dependency
+      final base64Audio = base64Encode(file);
+      final dataUri = 'data:audio/mp4;base64,$base64Audio';
+      
+      // 2. Update sos_logs directly with audio data
+      await _supabase.from('sos_logs').update({
+        'audio_url': dataUri,
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+      }).eq('id', logId);
+      
+      debugPrint('Supabase: Audio data URI linked directly to SOS log $logId (${file.length} bytes)');
+      
+      // 3. Optional: attempt storage bucket upload if bucket exists
+      try {
+        final storagePath = 'sos_audio/$logId.m4a';
+        await _supabase.storage.from('evidence').uploadBinary(
+          storagePath,
+          file,
+          fileOptions: const FileOptions(contentType: 'audio/m4a', upsert: true),
+        );
+        final publicUrl = _supabase.storage.from('evidence').getPublicUrl(storagePath);
+        if (publicUrl.isNotEmpty) {
+          await _supabase.from('sos_logs').update({
+            'audio_url': publicUrl,
+          }).eq('id', logId);
+          return publicUrl;
+        }
+      } catch (storageErr) {
+        debugPrint('Supabase storage bucket skipped (base64 data URI used): $storageErr');
+      }
+      
+      return dataUri;
+    } catch (e) {
+      debugPrint('Supabase Error (uploadSOSAudio): $e');
+      return null;
+    }
+  }
+
+  static Future<Uint8List?> _readFileBytes(String path) async {
+    try {
+      final file = File(path);
+      if (await file.exists()) {
+        return await file.readAsBytes();
+      }
+      return null;
+    } catch (e) {
+      debugPrint('Error reading file: $e');
+      return null;
+    }
+  }
+
+  // 2b. Update SOS Location (Live Tracking)
+  static Future<void> updateSOSLocation({
+    required String logId,
+    required double latitude,
+    required double longitude,
+  }) async {
+    try {
+      await _supabase.from('sos_logs').update({
+        'latitude': latitude,
+        'longitude': longitude,
+        'updated_at': DateTime.now().toIso8601String(),
+      }).eq('id', logId);
+      // Silent update to avoid log spam
+    } catch (e) {
+      debugPrint('Supabase Error (updateSOSLocation): $e');
+    }
+  }
+
+  // 2a. Log Community Incident
+  static Future<void> logIncident({
+    required String title,
+    required String type,
+    required String severity,
+    required double lat,
+    required double lng,
+    required String address,
+    required String description,
+    required int riskScore,
+    String? source,
+  }) async {
+    try {
+      // Map severity label to integer 1-4 for DB storage
+      final Map<String, int> severityValues = {
+        'low': 1,
+        'medium': 2,
+        'high': 3,
+        'critical': 4,
+      };
+      
+      await _supabase.from('incidents').insert({
+        'title': title,
+        'type': type.toLowerCase(),
+        'severity': severityValues[severity.toLowerCase()] ?? 2,
+        'source': source ?? 'user_report',
+        'lat': lat,
+        'lng': lng,
+        'address': address,
+        'description': description,
+        'verified': false,
+        'risk_score': riskScore,
+        'created_at': DateTime.now().toIso8601String(),
+      });
+      debugPrint('Supabase: Incident logged by ${source ?? "User"}: $title');
+    } catch (e) {
+      debugPrint('Supabase Error (logIncident): $e');
+    }
+  }
+
+  // 3. Sync Contacts — upserts by (user_email, phone) to avoid duplicates
+  static Future<String?> syncContact({
+    required String userEmail,
+    required String name,
+    required String phone,
+    required String relation,
+  }) async {
+    try {
+      await _supabase.from('contacts').upsert({
+        'user_email': userEmail,
+        'name': name,
+        'phone': phone,
+        'relation': relation,
+      }, onConflict: 'user_email,phone');
+      debugPrint('Supabase: Contact synced for $userEmail');
+      return null; // success
+    } catch (e) {
+      final errMsg = 'Supabase Error (syncContact): $e';
+      debugPrint(errMsg);
+      return errMsg;
+    }
+  }
+
+  // 4. Delete Contact
+  static Future<void> deleteContact(String id) async {
+    try {
+      await _supabase.from('contacts').delete().match({'id': id});
+      debugPrint('Supabase: Contact deleted ($id)');
+    } catch (e) {
+      debugPrint('Supabase Error (deleteContact): $e');
+    }
+  }
+
+  // 5. Admin Broadcasts (Private Chat between User and Admin)
+  static Stream<List<Map<String, dynamic>>> getAdminMessages(String userEmail) {
+    return _supabase
+        .from('admin_broadcasts')
+        .stream(primaryKey: ['id'])
+        .eq('user_email', userEmail)
+        .order('created_at', ascending: true);
+  }
+
+  static Future<void> sendAdminMessage({
+    required String userEmail,
+    required String message,
+    required bool isAdmin,
+  }) async {
+    try {
+      await _supabase.from('admin_broadcasts').insert({
+        'user_email': userEmail,
+        'message': message,
+        'is_admin': isAdmin,
+        'created_at': DateTime.now().toIso8601String(),
+      });
+    } catch (e) {
+      debugPrint('Supabase Error (sendAdminMessage): $e');
+    }
+  }
+
+  // 6. Generic Location Tracking
+  static Future<void> updateUserLocation({
+    required String email,
+    required double lat,
+    required double lng,
+  }) async {
+    try {
+      await _supabase.from('users').update({
+        'last_lat': lat,
+        'last_lng': lng,
+        'last_seen': DateTime.now().toIso8601String(),
+      }).eq('email', email);
+    } catch (e) {
+      debugPrint('Supabase Error (updateUserLocation): $e');
+    }
+  }
+
+  // 7. Auto FIR Submission
+  static Future<Map<String, dynamic>> submitFIR({
+    required String userEmail,
+    required String crimeType,
+    required String dateTime,
+    required String location,
+    required String incidentDescription,
+    required String accusedDescription,
+    required String witnesses,
+    required String generatedFir,
+    required List<String> evidenceIds,
+  }) async {
+    try {
+      final response = await _supabase.from('firs').insert({
+        'user_email': userEmail,
+        'crime_type': crimeType,
+        'date_time': dateTime,
+        'location': location,
+        'incident_description': incidentDescription,
+        'accused_description': accusedDescription,
+        'witnesses': witnesses,
+        'generated_fir': generatedFir,
+        'evidence_ids': evidenceIds, // the local or remote evidence identifiers
+        'status': 'pending', // for admin to review
+        'created_at': DateTime.now().toIso8601String(),
+      }).select();
+      
+      debugPrint('Supabase: FIR submitted for $userEmail');
+      return {'success': true, 'data': response};
+    } catch (e) {
+      debugPrint('Supabase Error (submitFIR): $e');
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+}
